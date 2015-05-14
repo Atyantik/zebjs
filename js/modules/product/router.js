@@ -1,7 +1,8 @@
 define([], function(){
 	var router = Z.makeRouter({
+		baseUrl: "home",
 		routes: {
-			'product': 'homePage'
+			'test': 'homePage'
 		},
 		homePage: function(){
 			alert("At Product home page");

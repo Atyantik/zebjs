@@ -53,8 +53,9 @@ define([], function() {
          */
         var router = Backbone.Router.extend({
             route: function(route, name, callback) {
-            	var base = this.baseUrl === 'string'?this.baseUrl:(this.baseUrl === 'function'?this.baseUrl():"");
-            	route = base + ( (route !== "" && route !== "/")  ? "/" + route: route );
+            	var base = typeof this.baseUrl === 'string'?this.baseUrl:(typeof this.baseUrl === 'function'?this.baseUrl():"");
+                base = base === "/" ? "" : base;
+            	route = base + ( (route !== "" && route !== "/" && base !== "")  ? "/" + route: route );
                 
                 if (!_.isRegExp(route)) route = this._routeToRegExp(route);
                 if (_.isFunction(name)) {
