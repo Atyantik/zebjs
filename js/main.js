@@ -2,7 +2,7 @@
  * Initializing the default namespace for the project Munch
  * @type {{}|*}
  */
-window.z = window.z || {};
+var z = z || {};
 
 /**
  * Default ENV for which the configurations would be loaded
@@ -35,8 +35,7 @@ z.config = {
         'jquery': 'libs/jquery',
         'underscore': 'libs/underscore',
         'backbone': 'libs/backbone',
-        'zeb': 'zeb',
-
+        'zeb': 'libs/zeb',
     },
 
     /**
@@ -58,17 +57,15 @@ z.config = {
      * javascript files to be loaded when needed
      */
     modules: [
-    	'home',
-    	'user',
-    	'admin',
-    	'product'
+    	'home','user','product'
     ],
 };
 
-z.zebFile = "zeb";
-try {
-	z.zebFile = (z.config["baseUrl"] || "") + "zeb.js?v=" + z.config.version;
-} catch(e) {}
-
-// Require zeb file to proceed forward with the configurations provided
-require([z.zebFile]);
+if(typeof require != "undefined"){
+    // Url args according to version and enviornment 
+    z.config["urlArgs"] = "bust=" + (z.config["version"] || (new Date).getTime());
+    // Initialize require configurations
+    require.config(z.config);
+    // Require zeb file to proceed forward with the configurations provided
+    require(["zeb"]);
+}

@@ -1,10 +1,12 @@
-define([], function(){
-	var router = Z.makeRouter({
+define(["zeb"], function(z){
+	var router = z.router({
 		routes: {
-			'': 'homePage'
+			'': {
+				controller: 'home',
+				action: 'index'
+			}
 		},
 		homePage: function(){
-			alert("At home page");
 		},
 		initialize: function() {
 		}

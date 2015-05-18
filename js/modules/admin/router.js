@@ -1,5 +1,5 @@
-define([], function(){
-	var router = Z.makeRouter({
+define(["zeb"], function(Z){
+	var router = Z.router({
 		routes: {
 			'admin': 'homePage'
 		},
