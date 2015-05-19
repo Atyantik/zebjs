@@ -6,53 +6,233 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
         return props["zebInstance"];
     }
 
-    // constructor of zebjs
-    var z = function() {
+    /**
+     * Deferred Manager
+     * A stack of deferred are manage, they keep track of model deferreds
+     * and service loading deferred.
+     */
+    var DeferManager = function(namespace) {
+        var stack = [];
+        var defPrefix = (namespace || "ZEBJS") + "_";
+        this.registerDefer = function(name, prefix) {
+            var def = $.Deferred(),
+                terminated = false,
+                localObj = {};
+            // decide prefix for deferred 
+            prefix = prefix ? (defPrefix + prefix + "_") : defPrefix;
+            // Add the uniqueid to the deferred Object
+            var _deferred_id = _.uniqueId(prefix);
+            def._deferred_id = _deferred_id;
+            if (!name) {
+                name = _deferred_id;
+            }
+            var stackDeferred = _.findWhere(stack, {
+                name: name
+            });
+            if (stackDeferred && stackDeferred.instance && _.isFunction(stackDeferred.instance.promise)) {
+                console.log("A similiar deferred was registered, hence returning the registered deferrred",
+                    " -- Deffered Name: " + name);
+                return stackDeferred['instance'];
+            }
+            localObj.o_done = def.done, localObj.o_fail = def.fail,
+            localObj.o_then = def.then, localObj.o_always = def.always,
+            localObj.o_progress = def.progress, localObj.o_state = def.state;
+            localObj.tuples = [
+                ["done", "o_done"],
+                ["fail", "o_fail"],
+                ["always", "o_always"],
+                ["progress", "o_progress"]
+            ];
+            _.each(localObj.tuples, function(tuple) {
+                def[tuple[0]] = function() {
+                    var args = Array.prototype.slice.call(arguments);
+                    flattenArgs = _.flatten(args, true);
+                    var finalArgs = [];
+                    _.each(flattenArgs, function(a) {
+                        if (_.isFunction(a)) {
+                            // Wrapped callback
+                            //console.log(a.toString());
+                            var wcb = function() {
+                                return terminated ? false : a.apply(def, arguments);
+                            };
+                            finalArgs.push(wcb);
+                        } else {
+                            finalArgs.push(a);
+                        }
+                    });
+                    //console.log(finalArgs);
+                    localObj[tuple[1]].apply(def, finalArgs);
+                }
+            }, this);
+            def.terminate = function() {
+                var defObj = _.findWhere(stack, {
+                    id: _deferred_id
+                });
+                defObj.instance = null;
+                stack = _.reject(stack, function(stackObj) {
+                    return stackObj["id"] == _deferred_id;
+                });
+                terminated = true;
+            };
+            def.state = function() {
+                return terminated ? "terminated" : localObj["o_state"].apply(def, arguments);
+            };
+            def.isTerminated = function() {
+                return !!terminated;
+            };
+            stack.push({
+                instance: def,
+                id: _deferred_id,
+                name: name,
+                terminated: terminated
+            });
+            return def;
+        };
 
-        // Initialize router definition for z.
-        this.initRouterDefinitions();
-
-        this.initModules();
-
-        // Setting initialized to true
-        this.isInitialized = true;
+        // Synonym for better operation
+        this.new = this.registerDefer;
+        /**
+         * Terminate instances according to group name,
+         * if no group name is provided than terminate all the instances
+         */
+        this.terminateAll = function(prefix) {
+            prefix = prefix || "";
+            _.each(stack, function(defObj) {
+                if (defObj.instance && _.isFunction(defObj.instance.terminate) && defObj.id.indexOf(defPrefix + prefix) !== -1) {
+                    defObj.instance.terminate();
+                }
+            });
+            return this;
+        };
+        this.terminateById = function(id) {
+            var defObj = _.findWhere(stack, {
+                id: id
+            });
+            if (defObj && defObj.instance && defObj.instance.terminate) {
+                defObj.instance.terminate();
+                return true;
+            }
+            return false;
+        };
+        this.terminateByName = function(name) {
+            var defObj = _.findWhere(stack, {
+                name: name
+            });
+            if (defObj && defObj.instance && defObj.instance.terminate) {
+                defObj.instance.terminate();
+                return true;
+            }
+            return false;
+        }
+        this.getStack = function() {
+            return stack;
+        }
     };
-    /**
-     * Load a service with service name/object, with a callback
-     */
-    var loadService = function(service, callback, context) {
-        var def = $.Deferred();
-        var serviceKey = false;
-        if (_.isString(service)) {
-            serviceKey = service;
-        }
-        if (_.isObject(service)) {
-            console.log(service);
-        }
-        if (!serviceKey) {
-            def.reject();
-        }
-        if (hasService(serviceKey)) {}
-
-        require([serviceKey], function(serviceClass) {
-            var serviceInstance = getService(serviceKey);
-            context = context || serviceInstance;
-            def.resolveWith(context, [serviceInstance]);
-        });
-
-        return def;
-    }
 
     /**
-     * stop script at any moment while app is running
+     * Service Manager
+     * Router & Controller are decorated with the service class
+     * Service class maintains singleton pattern and thus only one
+     * instance of service class can be initiated
      */
-    z.prototype.stopScript = function(message) {
-        for (var i = 10000; i > 0; i--) {
-            clearInterval(i);
+    var BaseService = function(serviceManager) {
+        this.loadService = function(name, callback) {
+            return serviceManager.loadService(name, this, callback);
         }
-        var html = '<!DOCTYPE html><html lang="en"><body><p id="zebPreload" style="text-align:center;padding:40px;font-family:Arial,Helvetica,sans-serif;font-size:13px;">' + message + '</p></body></html>';
-        document.write(html);
-        return true;
+        this.deferred = function(uniqueName) {
+            
+        }
+    };
+    // Add extend to Base Service
+    BaseService.extend = Backbone.View.extend;
+    var ServiceManager = function(dm) {
+        // dm is deref manager innstance
+
+        // Empty Stack of services
+        var stack = [];
+
+        // check if the service already exists
+        this.hasService = function(serviceKey) {
+            var service = _.findWhere(stack, {
+                id: serviceKey
+            });
+            if (service && service.instance) {
+                return true;
+            }
+            return false;
+        };
+        /**
+         * Provided the service key context and deffered
+         * resolve the service loading with this function
+         */
+        var resolveService = _.bind(function(serviceKey, context, def) {
+            def = def || dm.new();
+            var serviceInstance = this.getService(serviceKey);
+            context = context || serviceInstance.instance;
+
+            //def.done(function(controller){
+            //console.log(controller.toString());
+            //});
+
+            def.resolveWith(context, [serviceInstance.instance]);
+
+            return def;
+        }, this);
+        /**
+         * Get instance of service
+         * with argument as service key
+         */
+        this.getService = function(serviceKey) {
+            var service = _.findWhere(stack, {
+                id: serviceKey
+            });
+            if (service && service.instance) {
+                return service;
+            }
+            return false;
+        };
+        this.registerService = function(serviceKey, serviceClass) {
+            if (this.hasService(serviceKey)) {
+                throw "Service: " + serviceKey + ", already registered!";
+                return;
+            }
+            if (typeof serviceClass !== "function") {
+                throw "Requested service: " + serviceKey + ", is not a class";
+                return;
+            }
+            var instance = new serviceClass();
+            var serviceObj = {
+                id: serviceKey,
+                instance: instance
+            };
+            stack.push(serviceObj);
+            return this;
+
+        };
+        this.loadService = function(serviceKey, context, callback) {
+            // Create a deferred for service loading
+            var def = dm.new();
+
+            /**
+             *  change context to provided context or window
+             *  we will later change it to class loaded if no explicit
+             *  context is provided
+             */
+            context = context || window;
+            if (!_.isString(serviceKey)) {
+                def.rejectWith(context);
+            }
+
+            if (this.hasService(serviceKey)) {
+                resolveService(serviceKey, context, def);
+            } else {
+                require([serviceKey], _.bind(function(serviceClass) {
+                    this.registerService(serviceKey, serviceClass);
+                    resolveService(serviceKey, context, def);
+                }, this));
+            }
+            return def;
+        };
     };
 
     /**
@@ -87,7 +267,8 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 execObj["module"] = execObj["module"] || this.module;
                 var serviceKey = "modules/" + execObj["module"] + "/controllers/" + execObj["controller"];
                 callback = function() {
-                    loadService(serviceKey).done(function(controller) {
+                    serviceManager.loadService(serviceKey).done(function(controller) {
+                        //                        console.log(controller.toString());
                         if (typeof controller[execObj["action"]] != "undefined") {
                             controller[execObj["action"]].apply(controller);
                         }
@@ -95,8 +276,6 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 };
 
             }
-
-
 
             if (!callback) callback = this[name];
             var router = this;
@@ -110,6 +289,37 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             return this;
         }
     });
+
+    // Instance of Deferred Manager
+    var deferManager = new DeferManager("ZEBJS");
+
+    // Instance of Service Manager
+    var serviceManager = new ServiceManager(deferManager);
+
+    // constructor of zebjs
+    var z = function() {
+
+        // Initialize router definition for z.
+        this.initRouterDefinitions();
+
+        this.initModules();
+
+        // Setting initialized to true
+        this.isInitialized = true;
+    };
+
+    /**
+     * stop script at any moment while app is running
+     */
+    z.prototype.stopScript = function(message) {
+        for (var i = 10000; i > 0; i--) {
+            clearInterval(i);
+        }
+        var html = '<!DOCTYPE html><html lang="en"><body><p id="zebPreload" style="text-align:center;padding:40px;font-family:Arial,Helvetica,sans-serif;font-size:13px;">' + message + '</p></body></html>';
+        document.write(html);
+        return true;
+    };
+
     z.prototype.initRouterDefinitions = function() {
 
         /**
@@ -150,167 +360,6 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
         });
     };
 
-    /**
-     * Deferred Manager
-     * A stack of deferred are manage, they keep track of model deferreds
-     * and service loading deferred.
-     */
-    var DeferredManager = function() {
-        var stack = [];
-        var defPrefix = "DEF_";
-        this.registerDeferred = function(deferredKey, prefix) {
-            var def = $.Deferred(),
-                terminated = false,
-                localObj = {};
-            // decide prefix for deferred 
-            prefix = prefix ? (defPrefix + prefix + "_") : defPrefix;
-            // Add the uniqueid to the deferred Object
-            var _deferred_id = _.uniqueId(prefix);
-            def._deferred_id = _deferred_id;
-            if (!deferredKey) {
-                deferredKey = _deferred_id;
-            }
-            var stackDeferred = _.findWhere(stack, {
-                name: deferredKey
-            });
-            if (stackDeferred && stackDeferred.instance && _.isFunction(stackDeferred.instance.promise)) {
-                console.log("A similiar deferred was registered, hence returning the registered deferrred",
-                    " -- Deffered KEY: " + deferredKey);
-                return stackDeferred['instance'];
-            }
-            localObj.o_done = def.done, localObj.o_fail = def.fail,
-            localObj.o_then = def.then, localObj.o_always = def.always,
-            localObj.o_progress = def.progress, localObj.o_state = def.state;
-            localObj.tuples = [
-                ["done", "o_done"],
-                ["fail", "o_fail"],
-                ["always", "o_always"],
-                ["progress", "o_progress"]
-            ];
-            _.each(localObj.tuples, function(tuple) {
-                def[tuple[0]] = function() {
-                    var args = Array.prototype.slice.call(arguments);
-                    flattenArgs = _.flatten(args, true);
-                    var finalArgs = [];
-                    _.each(flattenArgs, function(a) {
-                        if (_.isFunction(a)) {
-                            // Wrapped callback
-                            var wcb = function() {
-                                return terminated ? false : a.apply(def, args);
-                            };
-                            finalArgs.push(wcb);
-                        } else {
-                            finalArgs.push(a);
-                        }
-                    });
-                    localObj[tuple[1]].apply(def, finalArgs);
-                }
-            }, this);
-            def.terminate = function() {
-                var defObj = _.findWhere(stack, {
-                    id: _deferred_id
-                });
-                defObj.instance = null;
-                stack = _.reject(stack, function(stackObj) {
-                    return stackObj["id"] == _deferred_id;
-                });
-                terminated = true;
-            };
-            def.state = function() {
-                return terminated ? "terminated" : localObj["o_state"].apply(def, arguments);
-            };
-            def.isTerminated = function() {
-                return !!terminated;
-            };
-            stack.push({
-                instance: def,
-                id: _deferred_id,
-                name: deferredKey,
-                terminated: terminated
-            });
-            return def;
-        };
-        /**
-         * Terminate instances according to group name,
-         * if no group name is provided than terminate all the instances 
-         */ 
-        this.terminateAll = function(prefix) {
-            prefix = prefix || ""; 
-            _.each(stack, function(defObj) {
-                if (defObj.instance && _.isFunction(defObj.instance.terminate) && defObj.id.indexOf(defPrefix + prefix) !== -1) {
-                    defObj.instance.terminate();
-                }
-            });
-            return this;
-        };
-        
-    };
-    // var dm = new DeferredManager;
-    // var def = dm.registerDeferred("some_def");
-    // var def2 = dm.registerDeferred(null, "DEF");
-    // def.done([
-    //     _.bind(function() {
-    //         console.log(1, this, def.state());
-    //     }), [
-    //         _.bind(function() {
-    //             console.log(2, this, def.state());
-    //         }),
-    //         _.bind(function() {
-    //             console.log(3, this, def.state());
-    //         }), [
-    //             _.bind(function() {
-    //                 console.log(4, this, def.state());
-    //             }),
-    //             _.bind(function() {
-    //                 console.log(5, this, def.state());
-    //             }),
-    //         ]
-    //     ]
-    // ]);
-    // setTimeout(function() {
-    //     dm.terminateAll();
-    // }, 1150);
-    // setTimeout(function() {
-    //     def.resolve();
-    // }, 1000);
-    // setTimeout(function() {
-    //     console.log(dm.getStack());
-    //     def.done(function() {
-    //         alert("Its again me")
-    //     });
-    // }, 1200);
-
-    /**
-     * Service Class
-     * Router & Controller are decorated with the service class
-     * Service class maintains singleton pattern and thus only one
-     * instance of service class can be initiated
-     */
-    var ServiceManager = function() {
-
-        // Empty Stack of services
-        var stack = {};
-
-        // check if the service already exists
-        this.hasService = function(serviceKey) {
-            if (typeof stack[serviceKey] == "object" && stack[serviceKey]._service_id) {
-                return true;
-            }
-            return false;
-        };
-        /**
-         * Provided the service key context and deffered
-         * resolve the service loading with this function
-         */
-        var resolveService = function(serviceKey, context, def) {
-            def = def || $.Deferred();
-            var serviceInstance = getService(serviceKey);
-            context = context || serviceInstance;
-            def.resolveWith(context, [serviceInstance]);
-            return def;
-        };
-
-    };
 
     /** Return ZebJS instance **/
     // Delete the reference of the zebFile and add previous properties to prototype
