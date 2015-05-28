@@ -1,0 +1,21 @@
+{
+  "name": "ZebCompressor",
+  "version": "0.0.1",
+  "description": "Zeb Compressor is used for compressing modules created with zebjs fraemwork",
+  "main": "build.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ZebJS",
+    "compressor"
+  ],
+  "author": "Atyantik Technologies",
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "glob": "~5.0.10",
+    "q": "~1.4.1",
+    "underscore": "~1.8.3",
+    "wrench": "~1.5.8"
+  }
+}

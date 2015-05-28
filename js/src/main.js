@@ -23,8 +23,15 @@ z.config = {
 	 * In this example we consider it to be an path relative to website,
 	 * and the host is diretly pointing to the name of the website
 	 */
-	baseUrl: "/js/",
-
+	baseUrl: "/js/src/",
+    /**
+     * This will be the url that will be replaced as baseUrl when a build is generated
+     */
+    buildBaseUrl: "/js/build/",
+    /**
+     * Wait seconds to avoid timeout errors at low speed
+     */
+    waitSeconds: 300,
 	/**
 	 * Path is the basic dependency of the project, like jQuery,
 	 * BackboneJS, UnderscoreJS, text plugin etc. All the paths now provided are relative to the baseUrl
@@ -57,7 +64,7 @@ z.config = {
      * javascript files to be loaded when needed
      */
     modules: [
-    	'home','user','product'
+    	'home', 'user', 'product'
     ],
 };
 

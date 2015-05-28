@@ -1,14 +1,19 @@
 define(["zeb"], function(z){
 	var router = z.router({
+		baseUrl: "",
 		routes: {
 			'': {
 				controller: 'home',
 				action: 'index'
+			},
+			'dashboard': {
+				controller: "dashboard",
+				action: "index"
 			}
 		},
-		homePage: function(){
+		initialize: function() {			
 		},
-		initialize: function() {
+		homePage: function(){
 		}
 	});
 	return router;
