@@ -12,7 +12,9 @@ var z = z || {};
 var env = z["config"]? z["config"]["env"] || "local" : "local";
 var version = z["config"]? z["config"]["version"] || (new Date()).getTime() : (new Date()).getTime();
 
-z.config = {
+z.config = z.config || {};
+
+var config = {
 	// Set the enviorment of the application
 	env: env,
 	// set the version of application
@@ -65,8 +67,16 @@ z.config = {
      */
     modules: [
     	'home', 'user', 'product'
-    ],
+    ]
 };
+
+// Merge User Settings 
+var userConfig = userConfig || {}, compileConfig = compileConfig || {};
+function mergeObject(a,b){ var o = {}; for (var i in a) { o[i] = a[i]; } for (var i in b) { o[i] = b[i]; } return o; }
+
+z.config = mergeObject(config, z.config);
+z.config = mergeObject(z.config, userConfig);
+z.config = mergeObject(z.config, compileConfig);
 
 if(typeof require != "undefined"){
     // Url args according to version and enviornment 

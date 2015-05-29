@@ -10,6 +10,16 @@ var vm = require('vm');
 var fs = require("fs");
 
 /**
+ * Need underscore for object cloning and various other requirements
+ */
+var _ = require("underscore");
+
+/**
+ * Need uglify for compressing generated bundles
+ */
+var uglify = require('uglify-js');
+
+/**
  * Glob for traversing file in modules
  */
 var glob = require('glob');
@@ -49,7 +59,7 @@ var tmpFile = "main-compiled";
  * Src directory where all the developer write their code
  * the path of the directory is relative to this file
  */
-var srcDir = "../src";
+var srcDir = "../js/src";
 
 /**
  * TMP directory is the directory where all files from src folder are copied and
@@ -61,7 +71,7 @@ var tmpDir = "tmp";
  * Buid directory is where all the final build JavaScript will
  * be kept after being optimized
  */
-var buildDir = "../build";
+var buildDir = "../js/build";
 
 /**
  * Read the main file and execute it in current context
@@ -80,7 +90,7 @@ vm.runInThisContext(content);
 /**
  * Get the build basic configurations from the require config
  */
-var buildConfig = z.config;
+var buildConfig = _.extend({}, z.config);
 /**
  * List of modules that are active and executed in project
  * these are required to traverse every files in the modules
@@ -112,19 +122,30 @@ buildConfig.baseUrl = "";
  * We need to copy all the files from src folder to tmp folder
  * also empty the tmp dir before doing this
  */
-var emptyTmpDir = function(){
-    var files = glob.sync(tmpDir + "/*", false);
-    for(var i in files) {
+var removeFiles = function(files){
+    if(!_.isArray(files)) {
+        files = [files];
+    }
+    for (var i in files) {
         try {
             fs.unlinkSync(files[i]);
-        } catch(e){
+        } catch (e) {
             wrench.rmdirSyncRecursive(files[i]);
-        }    
+        }
     }
+}
+var emptyTmpDir = function() {
+    removeFiles(glob.sync(tmpDir + "/*", false));
 };
+var emptyBuildDir = function() {
+    removeFiles(glob.sync(buildDir + "/*", false));
+};
+
 emptyTmpDir();
+emptyBuildDir();
+
 wrench.copyDirSyncRecursive(srcDir, "tmp", {
-	forceDelete: true, // Whether to overwrite existing directory or not
+    forceDelete: true, // Whether to overwrite existing directory or not
     excludeHiddenUnix: false, // Whether to copy hidden Unix files or not (preceding .)
     preserveFiles: false, // If we're overwriting something and the file already exists, keep the existing
     preserveTimestamps: false, // Preserve the mtime and atime when copying files
@@ -141,6 +162,9 @@ buildConfig.out = outputFile + ".js";
 buildConfig.wrapShim = 'true';
 buildConfig.preserveLicenseComments = 'false';
 
+/**
+ * Adding routers to the common files
+ */
 var routerRequirePath = [];
 for (var i in buildConfig["paths"]) {
     buildConfig["paths"][i] = tmpDir + "/" + buildConfig["paths"][i];
@@ -157,18 +181,11 @@ for (var i in modules) {
 var finalExecution = function() {
     routerRequirePath = "[" + routerRequirePath.join(",") + "]";
 
+    // Require routers or necessary common files
     content += "\nrequire(" + routerRequirePath + ");\n";
-    if (content.indexOf("baseUrl") !== -1 && content.indexOf("buildBaseUrl") !== -1) {
-        content = content.replace("baseUrl", "devBaseUrl");
-    }
-    if (content.indexOf("buildBaseUrl") !== -1) {
-        content = content.replace("buildBaseUrl", "baseUrl");
-    }
 
-
-
-    fs.writeFile("tmp/" + tmpFile + ".js", content, 'utf8');
-    fs.writeFile('tmp/buildfile.js', util.inspect(buildConfig, false, 10), 'utf-8');
+    fs.writeFileSync("tmp/" + tmpFile + ".js", content, 'utf8');
+    fs.writeFileSync('tmp/buildfile.js', util.inspect(buildConfig, false, 10), 'utf-8');
 
     var exec = require('child_process').exec;
     exec('node r.js -o tmp/buildfile.js', function(error, stdout, stderr) {
@@ -179,11 +196,61 @@ var finalExecution = function() {
         console.log("LOG:: \n\n", stdout, stderr, "\n");
 
         // Move the build File to buildDir
-        fs.renameSync( tmpDir + "/" + outputFile + ".js", buildDir + "/" + outputFile + ".js" ); 
+        fs.renameSync(tmpDir + "/" + outputFile + ".js", buildDir + "/" + outputFile + ".js");
 
         //fs.unlinkSync(tmpDir + "/buildfile.js");
         //fs.unlinkSync(tmpDir + "/" + tmpFile + ".js");
         emptyTmpDir();
     });
 };
+
+var addCompileConfig = function() {
+    var compileConfig = {};
+    compileConfig["bundles"] = {};
+    if (content.indexOf("baseUrl") !== -1 && content.indexOf("buildBaseUrl") !== -1) {
+        console.log("am here having replacing base url");
+        compileConfig['baseUrl'] = z.config.buildBaseUrl;
+    }
+    /**
+     * Creating config file for modules
+     */
+    _.each(modules, function(module) {
+        var files = glob.sync(tmpDir + "/modules/" + module + "/**/*.*");
+        if(!_.isArray(compileConfig["bundles"][module])) {
+            compileConfig["bundles"][module] = [];
+        }
+        var moduleJSData = "";
+        _.each(files, function(file) {
+            if (file !== tmpDir + "/modules/" + module + "/router.js") {
+
+                /**
+                 * Read the file and compress it
+                 */
+                var path = file.replace(tmpDir + "/","").replace(".js","");
+                var data = fs.readFileSync(file,'utf-8');
+                data = data.replace('define(','define(\'' + path + '\',');
+                moduleJSData += ";" + data;
+                compileConfig["bundles"][module].push(path);
+            }
+        });
+        moduleJSData += ";";
+        try {
+            moduleJSData = uglify.minify(moduleJSData, {fromString: true, compress: {drop_console: true, drop_debugger: true} });
+            moduleJSData = moduleJSData.code;
+        } catch (ex) {
+            console.log(ex)
+        }
+        if(moduleJSData && moduleJSData.length) {
+            fs.writeFileSync(buildDir + "/" + module + ".js", moduleJSData, {encoding: 'utf-8'});   
+        }
+    });
+
+    // Adding bundles to the compile config
+    var configString =  "\n; var compileConfig = "+ util.inspect(compileConfig, false, 10) + ";\n";
+    content = configString + content;
+
+
+};
+
+addCompileConfig();
 finalExecution();

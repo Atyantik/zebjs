@@ -1,8 +1,10 @@
 define(["zeb"], function(z){
 	var router = z.router({
-		baseUrl: "home",
 		routes: {
-			'test': 'homePage'
+			'product': {
+				controller: "product",
+				action: "list"
+			}
 		},
 		homePage: function(){
 			alert("At Product home page");
