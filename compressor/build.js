@@ -178,32 +178,10 @@ for (var i in modules) {
     routerRequirePath.push("\"" + p + "\"");
 }
 
-var finalExecution = function() {
-    routerRequirePath = "[" + routerRequirePath.join(",") + "]";
-
-    // Require routers or necessary common files
-    content += "\nrequire(" + routerRequirePath + ");\n";
-
-    fs.writeFileSync("tmp/" + tmpFile + ".js", content, 'utf8');
-    fs.writeFileSync('tmp/buildfile.js', util.inspect(buildConfig, false, 10), 'utf-8');
-
-    var exec = require('child_process').exec;
-    exec('node r.js -o tmp/buildfile.js', function(error, stdout, stderr) {
-        if (error) {
-            console.log(error);
-            return;
-        }
-        console.log("LOG:: \n\n", stdout, stderr, "\n");
-
-        // Move the build File to buildDir
-        fs.renameSync(tmpDir + "/" + outputFile + ".js", buildDir + "/" + outputFile + ".js");
-
-        //fs.unlinkSync(tmpDir + "/buildfile.js");
-        //fs.unlinkSync(tmpDir + "/" + tmpFile + ".js");
-        emptyTmpDir();
-    });
-};
-
+/**
+ * Adding compile config to the compiled main file
+ * and adding bundles to map the file
+ */
 var addCompileConfig = function() {
     var compileConfig = {};
     compileConfig["bundles"] = {};
@@ -215,11 +193,21 @@ var addCompileConfig = function() {
      * Creating config file for modules
      */
     _.each(modules, function(module) {
+        /**
+         * Get all the files in modules
+         */
         var files = glob.sync(tmpDir + "/modules/" + module + "/**/*.*");
+
+        /**
+         * Initialize th bundles key in compile config
+         */
         if(!_.isArray(compileConfig["bundles"][module])) {
             compileConfig["bundles"][module] = [];
         }
         var moduleJSData = "";
+        /**
+         * Loop through each file, ignoring the routers and  
+         */
         _.each(files, function(file) {
             if (file !== tmpDir + "/modules/" + module + "/router.js") {
 
@@ -248,8 +236,32 @@ var addCompileConfig = function() {
     // Adding bundles to the compile config
     var configString =  "\n; var compileConfig = "+ util.inspect(compileConfig, false, 10) + ";\n";
     content = configString + content;
+};
 
+var finalExecution = function() {
+    routerRequirePath = "[" + routerRequirePath.join(",") + "]";
 
+    // Require routers or necessary common files
+    content += "\nrequire(" + routerRequirePath + ");\n";
+
+    fs.writeFileSync("tmp/" + tmpFile + ".js", content, 'utf8');
+    fs.writeFileSync('tmp/buildfile.js', util.inspect(buildConfig, false, 10), 'utf-8');
+
+    var exec = require('child_process').exec;
+    exec('node r.js -o tmp/buildfile.js', function(error, stdout, stderr) {
+        if (error) {
+            console.log(error);
+            return;
+        }
+        console.log("LOG:: \n\n", stdout, stderr, "\n");
+
+        // Move the build File to buildDir
+        fs.renameSync(tmpDir + "/" + outputFile + ".js", buildDir + "/" + outputFile + ".js");
+
+        //fs.unlinkSync(tmpDir + "/buildfile.js");
+        //fs.unlinkSync(tmpDir + "/" + tmpFile + ".js");
+        emptyTmpDir();
+    });
 };
 
 addCompileConfig();
