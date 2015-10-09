@@ -1,6 +1,7 @@
 /**
  * Get the virtual machine module of the node
  * this will be used to execute the main file and execute it in this context
+ * and configuration
  */
 var vm = require('vm');
 
@@ -59,7 +60,7 @@ var tmpFile = "main-compiled";
  * Src directory where all the developer write their code
  * the path of the directory is relative to this file
  */
-var srcDir = "../js/src";
+var srcDir = "../app";
 
 /**
  * TMP directory is the directory where all files from src folder are copied and
@@ -71,12 +72,22 @@ var tmpDir = "tmp";
  * Buid directory is where all the final build JavaScript will
  * be kept after being optimized
  */
-var buildDir = "../js/build";
+var buildDir = "../build";
 
 /**
  * Read the main file and execute it in current context
  */
-var content = fs.readFileSync(srcDir + "/" + mainFile + ".js", "utf-8");
+var htmlContent = fs.readFileSync(srcDir + "/" + "index.html", "utf-8"),
+reg = /\<script .*data\-main=(.*) .*\<\/script\>/,
+replaceScript = false;
+htmlContent = htmlContent.replace(/<!--(.*?)-->/g,"");
+var matchedJS = htmlContent.match(reg);
+
+if(matchedJS.length && matchedJS.length > 1) {
+    replaceScript = matchedJS[0];
+    var mainJSFile = matchedJS[1].replace('\"', "").split("?")[0];
+}
+var content = fs.readFileSync(srcDir + "/" + mainJSFile, "utf-8");
 /**
  * Change the baseurl as per compilation
  */
@@ -105,6 +116,12 @@ var modules = buildConfig.modules;
 var version = buildConfig.version;
 
 /**
+ * Get the javascript files base url so that we can get the mapping
+ * of the js modules.
+ */
+var baseUrl = buildConfig.baseUrl;
+
+/**
  * Delete the extra fields added to the require config in "z.config"
  * variable, just cause it may cause some glitch in the build version
  */
@@ -122,8 +139,8 @@ buildConfig.baseUrl = "";
  * We need to copy all the files from src folder to tmp folder
  * also empty the tmp dir before doing this
  */
-var removeFiles = function(files){
-    if(!_.isArray(files)) {
+var removeFiles = function(files) {
+    if (!_.isArray(files)) {
         files = [files];
     }
     for (var i in files) {
@@ -167,11 +184,11 @@ buildConfig.preserveLicenseComments = 'false';
  */
 var routerRequirePath = [];
 for (var i in buildConfig["paths"]) {
-    buildConfig["paths"][i] = tmpDir + "/" + buildConfig["paths"][i];
+    buildConfig["paths"][i] = tmpDir + baseUrl + buildConfig["paths"][i];
 }
 for (var i in modules) {
     var p = "modules/" + modules[i] + "/router";
-    buildConfig["paths"][p] = tmpDir + "/" + p;
+    buildConfig["paths"][p] = tmpDir + baseUrl + p;
     buildConfig["shim"][p] = {
         deps: ["zeb"]
     };
@@ -183,10 +200,10 @@ for (var i in modules) {
  * and adding bundles to map the file
  */
 var addCompileConfig = function() {
+    wrench.mkdirSyncRecursive(buildDir + baseUrl, 0777);
     var compileConfig = {};
     compileConfig["bundles"] = {};
     if (content.indexOf("baseUrl") !== -1 && content.indexOf("buildBaseUrl") !== -1) {
-        console.log("am here having replacing base url");
         compileConfig['baseUrl'] = z.config.buildBaseUrl;
     }
     /**
@@ -196,45 +213,51 @@ var addCompileConfig = function() {
         /**
          * Get all the files in modules
          */
-        var files = glob.sync(tmpDir + "/modules/" + module + "/**/*.*");
-
+        var files = glob.sync(tmpDir + baseUrl + "modules/" + module + "/**/*.*");
         /**
          * Initialize th bundles key in compile config
          */
-        if(!_.isArray(compileConfig["bundles"][module])) {
+        if (!_.isArray(compileConfig["bundles"][module])) {
             compileConfig["bundles"][module] = [];
         }
         var moduleJSData = "";
         /**
-         * Loop through each file, ignoring the routers and  
+         * Loop through each file, ignoring the routers and
          */
         _.each(files, function(file) {
-            if (file !== tmpDir + "/modules/" + module + "/router.js") {
+            if (file !== tmpDir + baseUrl +  "modules/" + module + "/router.js") {
 
                 /**
                  * Read the file and compress it
                  */
-                var path = file.replace(tmpDir + "/","").replace(".js","");
-                var data = fs.readFileSync(file,'utf-8');
-                data = data.replace('define(','define(\'' + path + '\',');
+                var path = file.replace(tmpDir + "/", "").replace(".js", "");
+                var data = fs.readFileSync(file, 'utf-8');
+                data = data.replace('define(', 'define(\'' + path + '\',');
                 moduleJSData += ";" + data;
                 compileConfig["bundles"][module].push(path);
             }
         });
         moduleJSData += ";";
         try {
-            moduleJSData = uglify.minify(moduleJSData, {fromString: true, compress: {drop_console: true, drop_debugger: true} });
+            moduleJSData = uglify.minify(moduleJSData, {
+                fromString: true,
+                compress: {
+                    drop_console: true,
+                    drop_debugger: true
+                }
+            });
             moduleJSData = moduleJSData.code;
         } catch (ex) {
             console.log(ex)
         }
-        if(moduleJSData && moduleJSData.length) {
-            fs.writeFileSync(buildDir + "/" + module + ".js", moduleJSData, {encoding: 'utf-8'});   
+        if (moduleJSData && moduleJSData.length) {
+            fs.writeFileSync(buildDir + baseUrl + module + ".js", moduleJSData, {
+                encoding: 'utf-8'
+            });
         }
     });
-
     // Adding bundles to the compile config
-    var configString =  "\n; var compileConfig = "+ util.inspect(compileConfig, false, 10) + ";\n";
+    var configString = "\n; var compileConfig = " + util.inspect(compileConfig, false, 10) + ";\n";
     content = configString + content;
 };
 
@@ -255,14 +278,13 @@ var finalExecution = function() {
         }
         console.log("LOG:: \n\n", stdout, stderr, "\n");
 
+        // Create the folder for Javascript to reside
+        wrench.mkdirSyncRecursive(buildDir + baseUrl, 0777);
         // Move the build File to buildDir
-        fs.renameSync(tmpDir + "/" + outputFile + ".js", buildDir + "/" + outputFile + ".js");
-
-        //fs.unlinkSync(tmpDir + "/buildfile.js");
-        //fs.unlinkSync(tmpDir + "/" + tmpFile + ".js");
-        emptyTmpDir();
+        fs.renameSync(tmpDir + "/" + outputFile + ".js", buildDir + baseUrl + outputFile + ".js");
+        //emptyTmpDir();
     });
 };
-
 addCompileConfig();
 finalExecution();
+//copyAllToBuild();

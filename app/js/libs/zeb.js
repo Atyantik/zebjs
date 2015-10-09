@@ -81,11 +81,16 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 var defObj = _.findWhere(stack, {
                     id: _deferred_id
                 });
-                defObj.instance = null;
-                stack = _.reject(stack, function(stackObj) {
-                    return stackObj["id"] == _deferred_id;
-                });
-                terminated = true;
+                if (defObj && defObj.instance) {
+                    if (typeof defObj.instance.abort === "function") {
+                        defObj.instance.abort.call(defObj.instance);
+                    }
+                    defObj.instance = null;
+                    stack = _.reject(stack, function(stackObj) {
+                        return stackObj["id"] == _deferred_id;
+                    });
+                    terminated = true;
+                }
             };
             def.state = function() {
                 return terminated ? "terminated" : localObj["o_state"].apply(def, arguments);
@@ -109,13 +114,17 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
          * if no group name is provided than terminate all the instances
          */
         this.terminateAll = function(prefix) {
+            console.log("Terminating all by prefix: " + prefix, "-----", stack);
             prefix = prefix || "";
+            var terminated = 0;
             _.each(stack, function(defObj) {
                 if (defObj.instance && _.isFunction(defObj.instance.terminate) && defObj.id.indexOf(defPrefix + prefix) !== -1) {
                     defObj.instance.terminate();
+                    terminated++;
                 }
             });
-            return this;
+            console.log(terminated + " defer terminated");
+            return terminated;
         };
         this.terminateById = function(id) {
             var defObj = _.findWhere(stack, {
@@ -217,10 +226,47 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
     };
     _.extend(BaseService.prototype, Events, {
         loadService: function(name, callback) {
-            return serviceManager.loadService(name, this, callback);
+            return serviceManager.loadService(name, callback, this);
         },
+        defer_prefix: "",
+        /**
+         * Create a deferred with the help of deferManager
+         * The created deferred has prefix of the serviceKey or custom set deferPrefix
+         * with the help of setDeferPrefix
+         */
         deferred: function(uniqueName) {
-            return deferManager.new.apply(deferManager, arguments);
+            var args = [
+                uniqueName,
+                this.getDeferPrefix()
+            ];
+            return deferManager.new.apply(deferManager, args);
+        },
+        /**
+         * Set custom defer prefix for the deferred functionality of the service
+         * If the defer prefix is previously set then you need to pass parameter
+         * forceSet as true, cause the idea of using the setDeferPrefix is to set the prefix just once
+         * without a restriction to set the prefix runtime
+         *
+         */
+        setDeferPrefix: function(deferPrefix, forceSet) {
+            forceSet = typeof forceSet !== "undefined" ? !!forceSet : false;
+            if (_.isEmpty(deferPrefix)) {
+                throw "Invalid Defer Prefix: " + deferPrefix;
+                return false;
+            }
+            if (forceSet) {
+                this.defer_prefix = deferPrefix;
+            }
+            return this;
+        },
+        /**
+         * Get the defer prefix for creating the namespaced defers
+         */
+        getDeferPrefix: function() {
+            if (this.defer_prefix == "" && typeof this.getServiceKey == "function") {
+                this.setDeferPrefix(this.getServiceKey(), true);
+            }
+            return this.defer_prefix;
         },
         /**
          * This is just a replacement for router.navigate/Backbone.history.navigate
@@ -235,6 +281,10 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             options["trigger"] = typeof options["trigger"] == "undefined" ? true : options["trigger"];
             return Backbone.history.navigate.apply(Backbone.history, [fragment, options]);
         },
+        /**
+         * Get url parameters used in search query, it just returns the value form the
+         * getParams object that is updated on every route
+         */
         getUrlParam: function(name, defaultValue) {
             defaultValue = typeof defaultValue !== "undefined" ? defaultValue : false;
             if (_.isUndefined(name)) {
@@ -245,15 +295,70 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             }
             return defaultValue;
         },
-        beforeRemove: function() {},
-        module: "",
-        setModuleName: function(moduleName) {
-            this.module = moduleName;
-            return this;
+        /**
+         * _remove is a reserved functionality for every service and should not
+         * be overrided or there can be errors in removal of the service
+         */
+        _remove: function() {
+            /**
+             * Lets return a defer on call of the remove function as we know
+             * we may have some async task to complete on removal of a service
+             */
+            var def = deferManager.new();
+
+            $.when(this.beforeRemove.call(this)).then(_.bind(function() {
+
+                var defer = false;
+
+                /**
+                 * Check if removeSubView exists.
+                 * if so then apply the removeSubView Function
+                 * now the removeSubView function can be a defer so get the defer value
+                 */
+                if (typeof this.removeSubView == "function") {
+                    defer = this.removeSubView.apply(this, arguments);
+                }
+
+                var remove = function() {
+                    var dummyDef = false;
+                    if (this.remove && typeof this.remove == "function") {
+                        dummyDef = this.remove.apply(this, arguments);
+                    }
+                    return dummyDef;
+                };
+
+                var destroy = function() {
+                    /**
+                     * Terminate all the defer that are associated to the service
+                     * Thus use the _remove function very carefully
+                     * If there are any defers that have abort functionality then
+                     * abort them
+                     */
+                    deferManager.terminateAll(this.getServiceKey());
+
+                    /**
+                     * Stop listening to everything
+                     */
+                    this.stopListening();
+                };
+
+                /**
+                 * call the remove function if already exists for the
+                 * service, then call the destory function to unbind the listening
+                 * events and then resolve the remove deferred
+                 */
+                $.when(defer)
+                    .then(_.bind(remove, this))
+                    .then(_.bind(destroy, this))
+                    .then(function() {
+                        def.resolve();
+                    });
+
+            }, this));
+
+            return def;
         },
-        getModuleName: function() {
-            return this.module;
-        }
+        beforeRemove: function() {},
     });
 
     // Add extend to Base Service
@@ -264,16 +369,18 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
      * Router & Controller are decorated with the service class
      * Service class maintains singleton pattern and thus only one
      * instance of service class can be initiated
+     * @todo: Add more comments on what has been done!
      */
     var ServiceManager = function(dm) {
         // dm is defer manager instance
 
-        // Empty Stack of services
-        var stack = [];
+        // Stack of services
+        var serviceStack = [];
+        var serviceClosureStack = [];
 
         // check if the service already exists
         var hasService = _.bind(function(serviceKey) {
-            var service = _.findWhere(stack, {
+            var service = _.findWhere(serviceStack, {
                 id: serviceKey
             });
             if (service && service.instance) {
@@ -286,7 +393,7 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
          * with argument as service key
          */
         getService = _.bind(function(serviceKey) {
-            var service = _.findWhere(stack, {
+            var service = _.findWhere(serviceStack, {
                 id: serviceKey
             });
             if (service && service.instance) {
@@ -296,9 +403,9 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
         }, this);
 
         /**
-         * This method adds the service to the stack
+         * This method adds the service to the serviceStack
          * Accepts service key as input and service class wrapped with service
-         * interface to create an instance and add it to stack
+         * interface to create an instance and add it to serviceStack
          */
         var addService = _.bind(function(serviceKey, serviceClass) {
             if (hasService(serviceKey)) {
@@ -313,9 +420,10 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             var serviceInstance = new serviceClass();
             var serviceObj = {
                 id: serviceKey,
-                instance: serviceInstance
+                instance: serviceInstance,
+                type: serviceInstance.getServiceType()
             };
-            stack.push(serviceObj);
+            serviceStack.push(serviceObj);
             return this;
 
         }, this);
@@ -336,7 +444,7 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             }
 
             /**
-             * If the stack has no such service than load it on demand
+             * If the serviceStack has no such service than load it on demand
              * also as the service is loaded it needs to be a service closure
              * to function properly
              */
@@ -344,7 +452,7 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 /**
                  * load the file that has the service
                  */
-                require([serviceKey], _.bind(function(serviceClosure) {
+                var cb = function(closure) {
                     /**
                      * As it is currently a hard requirement that service only need to
                      * exists in its respective folder we can get the module name
@@ -359,19 +467,39 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                      * Check if the closure received is an approproate service
                      * closure or not.
                      */
-                    if (!serviceClosure || !serviceClosure.isServiceClosure) {
-                        throw "Invalid service: " + serviceKey;
+                    if (!closure || (!closure.isServiceClosure && !closure.isFactory)) {
+                        throw "Invalid service/factory: " + serviceKey;
                     }
-                    serviceClosure(serviceKey, module);
-                    context = context || serviceClosure;
-                    def.resolveWith(serviceClosure);
-                }, this));
+                    var cls = closure.call(closure, serviceKey, module, closure.type); 
+                    if (closure.isServiceClosure) {
+                        context = context || closure;
+                        def.resolveWith(closure, [getService(serviceKey).instance]);
+                    } else if(closure.isFactory){
+                        cls = closure.call(closure, serviceKey, module, closure.type);
+                        cls.isFactory = true;
+                        def.resolveWith(cls, [cls]);
+                    }
+                };
+                var serviceClosureObj = _.findWhere(serviceClosureStack, {
+                    id: serviceKey
+                });
+                if (serviceClosureObj) {
+                    cb.call(this, serviceClosureObj.instance);
+                } else {
+                    require([serviceKey], function(serviceClosure) {
+                        cb.call(this, serviceClosure);
+                        serviceClosureStack.push({
+                            id: serviceKey,
+                            instance: serviceClosure
+                        });
+                    });
+                }
             } else {
                 var serviceObj = getService(serviceKey);
                 context = context || serviceObj.instance;
                 def.resolveWith(context, [serviceObj.instance]);
             }
-            return def;
+            return def.promise();
         }, this);
 
         this.loadService = function(serviceArray, callback, context) {
@@ -392,28 +520,35 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             if (!_.isArray(serviceArray)) {
                 throw "Invalid Service key provided";
             }
-            var queue = false;
-            _.each(serviceArray, function(serviceKey) {
-                if (!queue) {
-                    queue = serviceLoader(serviceKey, context);
-                } else {
-                    queue = queue.then(serviceLoader(serviceKey, context));
-                }
-            });
+            var queueLoaded = 0;
+            var queue = dm.new();
+
+            // Arguments to resolve the service loader
+            var argsMapper = {};
             var args = [];
             context = context || window;
-            if (queue) {
-                queue.then(_.bind(function() {
-                    _.each(serviceArray, function(serviceKey) {
-                        /**
-                         * Terminate the defer created with this service key name for loading
-                         */
-                        dm.terminateByName(serviceKey);
-                        args.push(getService(serviceKey).instance);
+
+            /**
+             * Need to update this with a $.when and $.then
+             * to moke it more readable rather than using notify
+             */
+            queue.progress(function(serviceKey, serviceInstance) {
+                argsMapper[serviceKey] = serviceInstance;
+                queueLoaded++;
+                if (queueLoaded === serviceArray.length) {
+                    _.each(serviceArray, function(sk) {
+                        args.push(argsMapper[sk]);
                     }, this);
                     def.resolveWith(context, args);
-                }, this));
-            }
+                    queue.terminate();
+                }
+            });
+            _.each(serviceArray, function(serviceKey) {
+                serviceLoader(serviceKey, context).done(function(serviceInstance) {
+                    serviceInstance.callCount = serviceInstance.callCount ? serviceInstance.callCount + 1 : 1;
+                    queue.notify(serviceKey, serviceInstance);
+                });
+            });
             return def;
         };
 
@@ -426,31 +561,103 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 var genClass = function() {};
                 genClass.extend = extend;
                 classDef = genClass.extend(allProperties, staticProps);
+            } else if (typeof classDef == "function") {
+                if (!classDef.extend) {
+                    classDef.extend = extend;
+                }
+                // Create a clone rather than working with original copy
+                classDef = classDef.extend(props, staticProps);
             }
             if (typeof classDef !== "function") {
                 throw "Invalid Class Provided for making a service";
             }
-            if (!classDef.extend) {
-                classDef.extend = extend;
+
+            if (typeof classDef._remove != "undefined" || typeof classDef.prototype._remove !== "undefined") {
+                throw "Reserved method \"remove\" declared, please use beforeRemove Instead";
             }
             var sm = this;
-            var serviceClosure = function(serviceKey, moduleName) {
+            var serviceClosure = function(serviceKey, moduleName, serviceType) {
+                if (!serviceType) {
+                    serviceType = "service";
+                    var stArr = serviceKey.match("/.*/(.*)/.*");
+                    if (stArr && stArr.length >= 2) {
+                        serviceType = (stArr[1] + "").trim();
+                    }
+                }
+                if(serviceType == "layout") {
+                    stArr = _.reject(serviceKey.split("/"), function(s){ return _.isEmpty(s.trim());});
+                    if (stArr && stArr.length >= 2) {
+                        moduleName = (stArr[1] + "").trim();
+                    }
+                }
                 var serviceClass = classDef;
+                var serviceKey = serviceKey || _.uniqueId(moduleName + "_");
                 if (classDef.isService != true) {
                     _.extend(classDef.prototype, BaseService.prototype);
                     serviceClass = classDef.extend(props, staticProps);
                     serviceClass.isService = true;
-                    serviceClass.prototype.module = moduleName;
+                    serviceClass = serviceClass.extend({
+                        getModuleName: function() {
+                            return moduleName;
+                        },
+                        getServiceType: function() {
+                            return serviceType;
+                        },
+                        getServiceKey: function() {
+                            return serviceKey;
+                        }
+                    });
                 }
-                var serviceKey = serviceKey || _.uniqueId(moduleName + "_");
-                addService(serviceKey, serviceClass);
+                if(!serviceClosure.isFactory) {
+                    addService(serviceKey, serviceClass);
+                }
+                return serviceClass;
+            };
+            serviceClosure.factory = function() {
+                serviceClosure.isFactory = true;
+                serviceClosure.isServiceClosure = false;
+                return serviceClosure; 
             };
             serviceClosure.isServiceClosure = true;
             return serviceClosure;
+        };
+        this.removeByKey = function(serviceKey) {
+            var service = _.findWhere(serviceStack, {
+                id: serviceKey
+            });
+            if (service) {
+                service._remove();
+                serviceStack = _.reject(serviceStack, function(s) {
+                    return s.id == serviceKey;
+                });
+                delete service;
+                return 1;
+            }
+            return 0;
+        };
+        this.removeByType = function(type, serviceKey) {
+            var services = _.filter(serviceStack, function(s) {
+                return (s.type == type && s.id !== serviceKey);
+            });
+            if (typeof services == "undefined") {
+                services = [];
+            }
+            var totalService = services.length;
+            if (services.length) {
+                _.each(services, function(s) {
+                    s.instance._remove();
+                    serviceStack = _.reject(serviceStack, function(stackService) {
+                        return s.id == stackService.id;
+                    });
+                    delete s;
+                });
+            }
+            return totalService;
         }
+        this.removeByTypeExcept = this.removeByType;
         this.getStack = function() {
-            return stack;
-        }
+            return serviceStack;
+        };
     };
 
     /**
@@ -483,6 +690,7 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             root = root.slice(0, -1) || '/';
         }
         var url = root + fragment;
+        //console.log(url, root, fragment);
 
         var pathStripper = /#.*$/;
 
@@ -527,6 +735,22 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
      * @type {*|void|extend|extend|extend|extend}
      */
     var router = Backbone.Router.extend({
+        layout: function(layout, callback) {
+            layout = layout ? layout : "default";
+            this._layoutRet = this.deferred();
+            var serviceDef = this.loadService("layouts/" + layout + "/index");
+            serviceDef.done(_.bind(function(layoutInstance) {
+                this.listenTo(layout, "success", function() {
+                    this._layoutRet.resolveWith(this, layoutInstance);
+                    this._layoutRet.terminate();
+                }, this);
+                setTimeout(_.bind(function(){
+                    this._layoutRet.resolve();
+                },this),3000);
+            }, this));
+            this._layoutRet;
+            return this._layoutRet;
+        },
         route: function(route, name, callback) {
 
             if (_.isString(route)) {
@@ -549,26 +773,44 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
             }
 
             // create a closure that 
+            var router = this;
+
             var execObj = _.isObject(name) ? name : (_.isObject(callback) ? callback : {});
             if (!_.isEmpty(execObj) && _.isString(execObj["controller"]) && _.isString(execObj["action"])) {
-                execObj["module"] = execObj["module"] || this.module;
+                execObj["module"] = execObj["module"] || this.getModuleName();
+                execObj["layout"] = typeof execObj["layout"] !== "undefined" ? execObj["layout"]: false;
                 var serviceKey = "modules/" + execObj["module"] + "/controllers/" + execObj["controller"];
                 callback = function() {
-                    var args = Array.slice(arguments);
+                    var args = Array.prototype.slice.call(arguments);
                     // Discard the query string
                     args.pop();
-
+                    // Remove the controllers but not the one that is being called. 
+                    // This helps in good execition when moving from route withing same controller
+                    serviceManager.removeByTypeExcept("controller", serviceKey);
                     serviceManager.loadService(serviceKey).done(function(controller) {
+                        if (controller.isFactory) {
+                            controller = new controller;
+                        }
                         controller.setRouteParam(args);
                         if (typeof controller[execObj["action"]] != "undefined") {
-                            controller[execObj["action"]].apply(controller);
+
+                            /**
+                             * Resolve the initialization and the layout then execute the
+                             * required action
+                             */
+                            var layoutDef = false;
+                            if(execObj["layout"]) {
+                                layoutDef = router.layout(execObj["layout"]);
+                            }
+                            $.when(controller._initRet)
+                                .then(function(){return layoutDef;})
+                                .then(_.bind(controller[execObj["action"]], controller));
                         }
                     });
                 };
             }
 
             if (!callback) callback = this[name];
-            var router = this;
             Backbone.history.route(route, function(fragment) {
                 var args = router._extractParameters(route, fragment);
                 callback && callback.apply(router, args);
@@ -581,12 +823,90 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
     });
 
     /**
+     * View Ovverrides as we need to add support for subviews and removal of subviews as
+     * soon as the view is removed
+     * Subviews can be added on the fly and if it existed already it can be made the subview
+     * forcefully
+     */
+    var view = Backbone.View.extend({
+        subViews: [],
+        getSubView: function(names) {
+            // If name is not provided return all views
+            if (_.isEmpty(names)) {
+                return _.pluck(this.subViews, 'instance');
+            }
+            if (_.isString(names)) {
+                names = [names];
+            }
+            var views = [];
+            _.each(names, function(name) {
+                var view = _.findWhere(this.subViews, {
+                    id: name
+                });
+                if (view) {
+                    views.push(view);
+                }
+            }, this);
+            return _.pluck(views, 'instance');
+        },
+        setSubView: function(name, instance) {
+            var existingViews = this.getSubView(name);
+            if (existingViews && existingViews.length) {
+                throw "Subview with name :" + name + ", already exists.";
+            }
+            if (_.isEmpty(name)) {
+                throw "Invalid name to set subview";
+            }
+            if (!instance || instance.getServiceType() !== "view") {
+                throw "Invalid subview instance provided! Must be an instance of z.view";
+            }
+            var subViewObj = {
+                id: name,
+                instance: instance
+            };
+            this.subViews.push(subViewObj);
+            return this;
+        },
+        removeSubView: function(names) {
+            var views = this.getSubView(names);
+
+            var queueLoaded = 0;
+            var queue = deferManager.new();
+            queue.progress(function() {
+                queueLoaded++;
+                if (queueLoaded === views.length) {
+                    queue.resolveWith(context, args);
+                }
+            });
+            _.each(views, function(view) {
+                $.when(view._remove.call(view)).then(function() {
+                    queue.notify("done");
+                });
+            });
+            return queue;
+        }
+    });
+
+    /**
      * Custom controllers for handling the layout, views & deferreds with
      * base url are necessary for namespacing all urls
-     * @type {*|void|extend|extend|extend|extend}
+     *
+     * @type {*|void|extend}
      */
-    var controller = function() {};
+    var controller = function() {
+        this._initRet = this.initialize.apply(this, arguments);
+        if (
+            this._initRet && 
+            _.isFunction(this._initRet.promise) &&
+            _.isFunction(this._initRet.resolve)
+        ) {
+            this._initRet = this._initRet.promise();
+        }
+    };
     _.extend(controller.prototype, Events, {
+        _initRet: false,
+        _layoutRet: false,
+        initialize: function() {},
         routeParams: {},
         getRouteParam: function(name, defaultValue) {
             defaultValue = typeof defaultValue !== "undefined" ? defaultValue : false;
@@ -604,7 +924,7 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 _.extend(this.routeParams, {}, setter);
                 return this;
             }
-            if(_.isString(setter)) {
+            if (_.isString(setter)) {
                 this.routeParams[setter] = value;
                 return this;
             }
@@ -651,15 +971,34 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
              */
             this.router = function(props, staticProps) {
                 var rs = serviceManager.convertToService(router, props, staticProps);
+                rs.type = "router";
                 return rs;
             };
 
             /**
-             * Return a registerable instance of router
+             * Return a registerable instance of controller
              */
             this.controller = function(props, staticProps) {
                 var cs = serviceManager.convertToService(controller, props, staticProps);
+                cs.type = "controller";
                 return cs;
+            }
+
+            /**
+             * Returns a registerable instnace of view
+             */
+            this.view = function(props, staticProps) {
+                var v = serviceManager.convertToService(view, props, staticProps);
+                v.type = "view";
+                return v;
+            };
+            /**
+             * Returns a registerable instance of layout
+             */
+            this.layout = function(props, staticProps) {
+                var l = serviceManager.convertToService(view, props, staticProps);
+                l.type = "layout";
+                return l;
             }
         },
         /**
@@ -672,9 +1011,12 @@ define(["backbone", "jquery", "underscore"], function(Backbone, $, _) {
                 routerPaths.push("modules/" + modules[i] + "/router");
             }
             serviceManager.loadService(routerPaths, function() {
+
                 Backbone.history.start({
                     pushState: true
                 });
+            }, null, {
+                terminateDeferreds: true
             });
         }
     });

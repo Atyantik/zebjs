@@ -1,0 +1,1 @@
+define("js/modules/product/controllers/product",["zeb"],function(o){return o.controller({list:function(){alert("On Product Page.")}})});

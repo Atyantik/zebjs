@@ -3,15 +3,18 @@ define(["zeb"], function(z){
 		baseUrl: "",
 		routes: {
 			'': {
+				model: 'home',
 				controller: 'home',
-				action: 'index'
+				action: 'index',
+				layout: 'default'
 			},
 			'dashboard': {
 				controller: "dashboard",
-				action: "index"
+				action: "index",
+				layout: 'default'
 			}
 		},
-		initialize: function() {			
+		initialize: function() {
 		},
 		homePage: function(){
 		}

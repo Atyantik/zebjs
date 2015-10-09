@@ -3,7 +3,7 @@ define(["zeb"], function(Z){
 		routes: {
 			'admin': 'homePage'
 		},
-		homePage: function(){
+		homePage: function() {
 			alert("At admin home page");
 		},
 		initialize: function() {
